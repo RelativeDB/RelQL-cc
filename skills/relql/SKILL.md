@@ -42,11 +42,16 @@ rows), and a **time window** (when). Best-fit questions:
 - **Missing attribute / status** — "which articles are missing a description",
   "will this loan's latest status end in DENIED"
 
-The current shipped RT-J checkpoint executes **binary classification** and
-**regression** only. Multiclass, ranking (`RANK TOP k`), and
-`RETURN QUANTILES`/`INTERVAL` **parse and validate but do not execute** — if the
-user needs one, write the query, but tell them it is not yet executable and fall
-back to a binary or regression framing where possible.
+The shipped RT-J checkpoint executes **binary classification**, **regression**,
+**multiclass classification**, and **ranking (`RANK TOP k`)**. Multiclass reuses
+the checkpoint's text head — it returns a predicted class plus approximate,
+uncalibrated class probabilities (cosine match of the decoded target embedding to
+the class labels' MiniLM embeddings; the argmax class is reference-exact).
+Ranking returns the top *k* via per-candidate existence scoring (no retraining;
+both reuse existing heads). `RETURN QUANTILES`/`INTERVAL` **parse and validate
+but do not execute** (no variance/quantile head) — if the user needs those, write
+the query but tell them they are not yet executable and fall back to a regression
+framing where possible.
 
 Predictions are **point-in-time correct**: every data access is bounded by an
 anchor time, so a model never sees the future it is asked to predict. Preserve

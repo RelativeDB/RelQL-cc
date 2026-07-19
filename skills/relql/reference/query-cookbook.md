@@ -58,7 +58,7 @@ PREDICT SUM(sales.qty) OVER (30 DAYS FOLLOWING HORIZONS 6 STEP 7 DAYS)
 FOR EACH products.product_id
 ```
 
-## Recommendation / ranking (parses; not executable on current checkpoint)
+## Recommendation / ranking (executes: top-k via per-candidate existence scoring)
 
 ```sql
 -- Top 12 articles a customer will buy next 30 days

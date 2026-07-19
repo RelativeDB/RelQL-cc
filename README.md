@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://relql.com/img/logo.svg" alt="RelQL logo" width="96" />
+  <img src="logo.svg" alt="RelQL logo" width="96" />
 </p>
 
 # RelQL for Claude Code
@@ -43,9 +43,10 @@ It walks the whole path with you:
 
 Churn / lapse, conversion / activation, spend & demand (regression), usage
 forecasts, recommendation ranking, and risk / status flags. The shipped RT-J
-checkpoint executes **binary classification** and **regression** today;
-multiclass, ranking, and quantile/interval outputs parse and validate but are
-not yet executable.
+checkpoint executes **binary classification**, **regression**, **multiclass
+classification** (predicted class + approximate probabilities, via the text
+head), and **ranking** (top-k via per-candidate existence scoring). Quantile /
+interval outputs parse and validate but are not yet executable.
 
 ## What's in here
 

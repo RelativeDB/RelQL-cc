@@ -128,8 +128,10 @@ EXPECTED VALUE | PROBABILITY | CLASS | DISTRIBUTION
 ```
 
 `RETURN PROBABILITY` gives a calibrated score for a classification target.
-`QUANTILES`/`INTERVAL`/`MULTICLASS`/`MULTILABEL` parse and validate but are **not
-executable** on the current RT-J checkpoint.
+`MULTICLASS` (predicted class + approximate probabilities) and `MULTILABEL`
+(top-k ranking) execute on the current RT-J checkpoint. `QUANTILES`/`INTERVAL`
+parse and validate but are **not executable** (no variance/quantile head in the
+checkpoint).
 
 ## Task types (inferred from the target — never declared)
 
@@ -138,8 +140,8 @@ executable** on the current RT-J checkpoint.
 | bare aggregation — `SUM(...)`, `COUNT(...)` | regression | ✅ |
 | aggregation vs literal — `COUNT(...) = 0`, `SUM(...) > 100` | binary classification | ✅ |
 | `EXISTS(...)` / `NOT EXISTS(...)` boolean target | binary classification | ✅ |
-| static categorical column, `FIRST`/`LAST` | multiclass | ❌ parses only |
-| `LIST_DISTINCT(...) RANK TOP K` | ranking | ❌ parses only |
+| static categorical column, `FIRST`/`LAST` | multiclass | ✅ (class + approx. probs, via text head) |
+| `LIST_DISTINCT(...) RANK TOP K` | ranking | ✅ (top-k via per-candidate existence scoring) |
 | any window with `HORIZONS > 1` | forecasting (value per horizon) | regression head |
 
 Model routing: classification → `hf://stanford-star/rt-j/classification`;

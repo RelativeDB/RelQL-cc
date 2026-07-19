@@ -50,9 +50,19 @@ Python computes MiniLM text embeddings itself. Java and Rust take a
 
 - Classification returns probabilities (sigmoid over logits); regression returns
   denormalized values.
-- The current single-head checkpoint serves **binary classification** and
-  **regression** only. Multiclass, ranking (`RANK TOP k`), and
-  `RETURN QUANTILES`/`INTERVAL` raise a clear error at execution (they still
-  parse and validate).
+- **Multiclass classification** executes via the checkpoint's **text head**: the
+  masked target cell is decoded to a 384-dim embedding, L2-normalized, and
+  matched by cosine similarity to the class labels' `all-MiniLM-L12-v2`
+  embeddings. It returns a predicted class (argmax cosine — reference-exact) plus
+  approximate, uncalibrated class probabilities (a softmax over the cosine
+  scores, not a trained softmax head). No retraining — it reuses the existing
+  text head.
+- **Ranking** (`LIST_DISTINCT(table.fk) RANK TOP k`) executes via per-candidate
+  existence scoring: distinct parent-table IDs (temporally bounded, capped at
+  1000) are each scored with the existence head, sigmoided, and the top *k*
+  returned in the `ranked` field. No retraining — it reuses the existing
+  existence/number head.
+- `RETURN QUANTILES`/`INTERVAL` still raise a clear error at execution (no
+  variance/quantile head in the checkpoint); they parse and validate.
 - A missing library or checkpoint raises a specific, actionable error
   (`RtNativeUnavailableError` in Python).
