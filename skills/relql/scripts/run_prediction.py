@@ -6,11 +6,14 @@ built for this project (the module that maps the schema and retrievers), then:
 
     python run_prediction.py \
         --query "PREDICT NOT EXISTS(orders.*) OVER (90 DAYS FOLLOWING) \
-                 FOR EACH customers.customer_id \
+                 FROM customers \
                  WHERE EXISTS(orders.*) OVER (180 DAYS PRECEDING)" \
         --anchor now --top 20
 
 --anchor accepts "now" or an ISO-8601 timestamp (use a past time to backtest).
+--params takes JSON binding the query's `:name` placeholders, e.g. a pinned
+cohort: --query "... WHERE customers.customer_id IN :ids" --params '{"ids": [1,2]}'
+--head loads a fine-tuned adapter saved by Engine.finetune.
 Output is JSON: [{"entity_id": ..., "score": ...}, ...] sorted high to low.
 """
 import argparse
@@ -44,13 +47,24 @@ def main() -> None:
     ap.add_argument("--query", required=True, help="a RelQL PREDICT statement")
     ap.add_argument("--anchor", default="now", help="'now' or an ISO-8601 time")
     ap.add_argument("--top", type=int, default=20, help="rows to print")
+    ap.add_argument("--params", default=None,
+                    help="JSON object binding the query's :name parameters")
+    ap.add_argument("--head", default=None,
+                    help="path to a fine-tuned head (Engine.finetune -> save)")
     args = ap.parse_args()
 
     from relativedb import ExecutionInput
 
     engine = build_engine()
-    result = engine.execute(
-        ExecutionInput(query=args.query, anchor_time=parse_anchor(args.anchor)))
+    if args.head:
+        # serve a fine-tuned adapter over the same frozen backbone
+        from relativedb import RtNativeBackend
+        engine.model_backend = RtNativeBackend(
+            schema=engine.schema, wiring=engine.wiring, head=args.head)
+    result = engine.execute(ExecutionInput(
+        query=args.query,
+        anchor_time=parse_anchor(args.anchor),
+        params=json.loads(args.params) if args.params else None))
 
     def score(p):
         # classification exposes .probability; regression carries a value.

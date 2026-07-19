@@ -38,7 +38,7 @@ def make_wiring(conn):
              f"ORDER BY {tcol} DESC LIMIT %s")   # <-- newest-first, capped
         return [row_from(child, r) for r in run(conn, q, [parent_id, bound.as_of, limit])]
 
-    def scan(table, bound):                       # enables bare FOR EACH
+    def scan(table, bound):                       # enables whole-table FROM
         for r in run(conn, f"SELECT {PK[table]} FROM {table}"):
             yield Row(table, r[PK[table]], {})
 

@@ -57,12 +57,24 @@ Python computes MiniLM text embeddings itself. Java and Rust take a
   approximate, uncalibrated class probabilities (a softmax over the cosine
   scores, not a trained softmax head). No retraining — it reuses the existing
   text head.
-- **Ranking** (`LIST_DISTINCT(table.fk) RANK TOP k`) executes via per-candidate
-  existence scoring: distinct parent-table IDs (temporally bounded, capped at
-  1000) are each scored with the existence head, sigmoided, and the top *k*
-  returned in the `ranked` field. No retraining — it reuses the existing
-  existence/number head.
-- `RETURN QUANTILES`/`INTERVAL` still raise a clear error at execution (no
-  variance/quantile head in the checkpoint); they parse and validate.
+- **Ranking** (`LIST_DISTINCT(table.fk)` / `ARRAY_AGG(table.fk)` with
+  `RANK TOP k` in the frame) executes via per-candidate existence scoring:
+  distinct parent-table IDs (temporally bounded, capped at 1000) are each
+  scored with the existence head, sigmoided, and the top *k* returned in the
+  `ranked` field. No retraining — it reuses the existing existence/number head.
+- `RETURN QUANTILES`/`INTERVAL` are not in the grammar: a single point head
+  exposes no distribution, so they are rejected at parse time.
 - A missing library or checkpoint raises a specific, actionable error
   (`RtNativeUnavailableError` in Python).
+
+## Fine-tuning (optional, frozen backbone)
+
+The same library exposes a frozen-backbone adapter path: `rt_encode_targets_device`
+returns the final target-cell state `[N, 512]`, and a small task head is fitted
+on those states with AdamW (`rt_finetune_head_*`). All four task types are
+supported. Surfaced in Python as `Engine.finetune(...) -> FineTunedHead`, saved
+as a ~2 KB safetensors adapter and served via `RtNativeBackend(head=...)`.
+
+Fitting requires **Metal**; head inference is CPU, so an adapter trained on a
+Mac serves anywhere. The transformer itself is never updated — that is what
+makes each example encodable once and fitting fast.

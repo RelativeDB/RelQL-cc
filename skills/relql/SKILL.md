@@ -48,10 +48,10 @@ the checkpoint's text head — it returns a predicted class plus approximate,
 uncalibrated class probabilities (cosine match of the decoded target embedding to
 the class labels' MiniLM embeddings; the argmax class is reference-exact).
 Ranking returns the top *k* via per-candidate existence scoring (no retraining;
-both reuse existing heads). `RETURN QUANTILES`/`INTERVAL` **parse and validate
-but do not execute** (no variance/quantile head) — if the user needs those, write
-the query but tell them they are not yet executable and fall back to a regression
-framing where possible.
+both reuse existing heads). `RETURN QUANTILES`/`INTERVAL` are **not part of the
+language** (the model gives a point estimate, not a distribution) and are
+rejected at parse time — if the user needs an interval, say so plainly and fall
+back to a regression framing.
 
 Predictions are **point-in-time correct**: every data access is bounded by an
 anchor time, so a model never sees the future it is asked to predict. Preserve
@@ -65,7 +65,7 @@ that answer.
 
 ### 1. Frame the question → target + population + window + task type
 
-Restate the user's question as: **target** (what), **for each** (population),
+Restate the user's question as: **target** (what), **from** (population),
 **over** (window). Decide the task type from the target shape (see
 `reference/grammar.md` §"Task types"). Confirm the framing with the user in one
 line before building anything (e.g. *"churn = no order in the next 90 days, for
@@ -100,16 +100,33 @@ Turn their tables into a RelativeDB `Schema`: for each table a primary key,
 typed columns (NUMBER / DATETIME / text), and a **time column** for event
 tables; declare **links** (child FK → parent). Inspect the real schema
 (`INFORMATION_SCHEMA`, `\d`, a `LIMIT 1` sample, or the DataFrame's dtypes) —
-don't guess column names. Keep IDs and FK values out of cells: they surface as
-identity + parent edges, never as feature cells. Write the schema declaration
-using the exact builder API from the language reference.
+don't guess column names. FK columns stay out of cells — they are edges.
+
+Two schema rules that decide whether the model sees anything at all:
+
+- **Every table needs at least one feature column.** A row with no cells emits
+  no tokens, and a token-less row that others link through is a dead end: the
+  whole subtree beneath it becomes unreachable and every entity scores
+  identically. The engine raises `ContextConnectivityWarning` when it spots
+  this — never ship a schema that triggers it.
+- **A primary key may also be a feature.** Declare it as a column when the key
+  carries meaning (a SKU, an ISBN, an airport code) — the same way
+  `time_column` names a declared column. Leave synthetic autoincrement ids out:
+  they track insertion order, and the model will read the id as a tenure proxy
+  that breaks on a new id range.
 
 ### 5. Write the RelQL query
 
 Using `reference/grammar.md` and `reference/query-cookbook.md`, write the
-`PREDICT … OVER (…) FOR EACH … [WHERE …]` statement. Rules:
+`PREDICT … OVER (…) FROM … [WHERE …]` statement. Rules:
 - Target window faces the **future** (`FOLLOWING`); population filter in `WHERE`
-  faces the **past** (`PRECEDING`).
+  faces the **past** (`PRECEDING`). An aggregation with no `OVER` is unbounded
+  in the direction of its clause.
+- `FROM` names the **table**, not the key — the primary key comes from the
+  schema. Alias it (`FROM customers c`) to shorten the rest.
+- Pin the cohort with a primary-key predicate and a **bind parameter**:
+  `WHERE customers.customer_id IN :ids`, supplying `params={"ids": [...]}` at
+  execution. That is also what lets the engine skip enumerating the table.
 - Restrict the population so you never score already-decided rows (e.g. exclude
   customers who already churned).
 - Validate before executing — `relativedb.parse` / `validate` in Python, or a
@@ -118,7 +135,8 @@ Using `reference/grammar.md` and `reference/query-cookbook.md`, write the
 ### 6. Wire the retrievers / connector
 
 Implement the retriever callbacks over the chosen source (entities, default
-links, and a scanner if the query uses bare `FOR EACH`). Use the exact
+links, and a scanner if the query scores a whole table rather than a pinned
+cohort). Use the exact
 signatures from the language reference. Every retriever must honor the temporal
 bound (`bound.as_of`) and return children newest-first within `limit`. Keep the
 connector application-owned — a small module the program imports.
@@ -133,10 +151,23 @@ Parsing/validation work without it; execution does not.
 ### 8. Execute and report
 
 Construct the engine with the model backend, `execute` with an `anchor_time`
-(default "now", or a past date for a backtest), read `result.predictions`
-(`.id`, `.probability`), sort, and present the top rows with a one-line reading
-of the query. Offer a **backtest**: rerun at a past anchor and compare to what
+(default "now", or a past date for a backtest) and `params` for the query's
+`:name` bindings, read `result.predictions` (`.id`, `.probability`, `.value`,
+`.ranked`), sort, and present the top rows with a one-line reading of the
+query. Offer a **backtest**: rerun at a past anchor and compare to what
 actually happened — the engine keeps the context point-in-time correct.
+
+### 9. Optional: fine-tune a head when zero-shot is not enough
+
+If the backtest is weak and the user has history, `engine.finetune(query,
+anchors, ...)` trains a small task head over the frozen backbone and returns a
+`FineTunedHead` to `save()` and serve via `RtNativeBackend(head=...)`. Labels
+are derived from the query's own target at past anchors, so nothing extra needs
+labelling. See `reference/api-python.md` §6.
+
+Judge it on **held-out** anchors, never on training loss: a falling loss with
+flat held-out quality means the head is data-limited, and adding epochs will
+not help — add anchors or entities instead.
 
 ## Reference files
 

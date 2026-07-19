@@ -1,35 +1,65 @@
 # RelQL grammar & semantics
 
 Authoritative syntax for writing RelQL queries. Keywords are case-insensitive.
-Column references are always qualified `table.column`; `table.*` means "rows".
+A column reference is `table.column`, `alias.column`, or a bare `column` bound
+to the population; `table.*` means "rows".
 
 ## Query structure
 
-Clause order: `PREDICT` and `FOR [EACH]` are required and come first (in that
-order). The trailing clauses may appear in any order after `FOR`, each at most
-once — except `WINDOW`, which may repeat.
+`PREDICT` is required and comes first. The trailing clauses may appear in any
+order after `FROM`, each at most once — except `WINDOW`, which may repeat.
 
 ```
 [EXPLAIN [PLAN|CONTEXT|ANALYZE] [FORMAT TEXT|JSON]]
-PREDICT   <target> [CLASSIFY | RANK TOP <k>]
-FOR [EACH] <entity_table>.<pkey> [= <literal> | IN (<list>)]
+PREDICT   <target> [CLASSIFY]
+[FROM      <table> [[AS] <alias>]]   -- the population; inferred if omitted
 [WHERE     <condition>]        -- filter the population (past-facing)
-[ASSUMING  <condition>]        -- counterfactual (parses; not yet applied)
+[ASSUMING  <condition>]        -- counterfactual (applied to the context)
 [AS OF     <anchor>]           -- bind the anchor time
 [RETURN    <return_spec>]      -- choose the output form
 [WINDOW    <name> AS (<window_spec>)]   -- reusable named frame (repeatable)
 ```
 
-- `FOR` and `FOR EACH` are equivalent (`EACH` optional). This is the sole
-  entity clause — there is **no** `GIVEN` clause and **no** `FORECAST` clause.
-- Enumerating every entity in `FOR EACH` requires a `TableScanner`. To score a
-  subset, constrain the key (`WHERE table.pk IN (...)`) or pass ids at execution
-  (`entity_ids`).
+- `FROM <table>` names the population. You write the **table**, not the key —
+  the primary key comes from the schema. There is **no** `FOR EACH` clause (it
+  was removed), no `GIVEN`, and no `FORECAST`.
+- An **alias** shortens the rest of the query: `FROM customers c … c.plan`.
+- `FROM` may be **omitted** when the target names exactly one table and is not
+  an aggregation — the population is then that table:
+  `PREDICT issues.label WHERE issues.label IS NULL`. An aggregate target names
+  a *linked* table, so it always needs an explicit `FROM`.
+- A bare column binds to the population: `PREDICT label FROM issues WHERE label
+  IS NULL` predicts `issues.label`.
+- **Cohort selection**: constrain the primary key in `WHERE` —
+  `WHERE customers.customer_id IN :ids`. The engine reads a primary-key
+  predicate as the cohort itself and scores only those entities, so a pinned
+  query needs no `TableScanner`. Scoring a whole table (no pk predicate) does
+  require one. There is no `entity_ids` execution input.
 - `AS OF` takes a `DATE` literal (`2026-07-01`), a bound parameter
   (`:prediction_time`), or `NOW`. A DATE/param overrides the execution anchor;
   `NOW`/absent uses the execution `anchor_time`.
-- `ASSUMING` is parsed and validated and carried on the query but **not yet**
-  applied to context assembly.
+- `ASSUMING` is a counterfactual: its `column = literal` assignments
+  (optionally joined by `AND`) are written into the assembled context before
+  scoring, so the model sees the assumed world. Conditions that name no
+  concrete value — inequalities, `IN`, `OR`/`NOT`, aggregate conditions —
+  describe a set of possible worlds and **raise** at execution. An assignment
+  whose table has no rows in the context warns. Difference against the same
+  query without `ASSUMING` to estimate an intervention's effect.
+
+## Bind parameters
+
+Anywhere a literal is allowed, `:name` stands in for a value supplied at
+execution time. With `IN`, one parameter binds the **whole list**, so a single
+query text serves any cohort size.
+
+```sql
+WHERE customers.customer_id = :id
+WHERE customers.customer_id IN :ids
+WHERE customers.plan LIKE :pattern AND customers.age > :min_age
+```
+
+Values come from `params` on the execution input — the same place `AS OF :t`
+reads its anchor. An unsupplied `:name` is an error, never a silent NULL.
 
 ## Target expression
 
@@ -40,24 +70,40 @@ The target after `PREDICT` is one of:
   `ABS`/`LOG`/`EXP`/`LEAST`/`GREATEST`, column-to-column comparison
 - optionally compared to a literal (`… > 100`, `… = 0`, `… NOT LIKE '%DENIED'`)
 
-`CLASSIFY` and `RANK TOP k` are target directives.
+`CLASSIFY` is a target directive. Ranking is a **frame** directive —
+`OVER (… RANK TOP k)` — see "Time windows" below.
 
 ## Aggregation functions
 
 ```
-AGG( table.column | table.* [WHERE <row filter>] ) OVER ( <window_spec> )
+AGG( table.column | table.* [WHERE <row filter>] ) [OVER ( <window_spec> )]
 ```
 
 Functions: `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`, `COUNT_DISTINCT`,
-`LIST_DISTINCT`, `FIRST`, `LAST`, `EXISTS`, `NOT EXISTS`.
+`LIST_DISTINCT`, `ARRAY_AGG`, `FIRST`, `LAST`, `EXISTS`, `NOT EXISTS`.
 
 - `COUNT(table.*)` counts rows. `EXISTS(table.*)` / `NOT EXISTS(table.*)` are
   boolean existence tests (cleaner than the still-valid `COUNT(...) > 0`).
 - `FIRST` / `LAST` pick a value by row time (good for status columns).
-- `LIST_DISTINCT` predicts a set of values (usually FK IDs); takes a directive
-  `RANK TOP K` (ranking) or `CLASSIFY`.
+- `LIST_DISTINCT` predicts the **set** of values that will appear (usually FK
+  IDs); duplicates collapse.
+- `ARRAY_AGG` predicts the values in order and **keeps duplicates** — use it
+  when "bought twice" should count twice.
+- Either can be ranked with the frame's `RANK TOP K`, or turned into a
+  per-value yes/no with `CLASSIFY`.
+- Aggregating a **foreign key** is legal and is how ranking works:
+  `ARRAY_AGG(orders.product_id)` asks which parents a row will point at.
 - Inline row filter (distinct from the population `WHERE`):
   `COUNT(transactions.* WHERE transactions.amount > 10) OVER (30 DAYS FOLLOWING)`.
+
+**`OVER` is optional.** Without it the frame is unbounded in the direction of
+the clause: the future in `PREDICT`/`ASSUMING`, the past in `WHERE`.
+
+```sql
+PREDICT NOT EXISTS(orders.*)      -- (NOW, +inf]  will they ever order again?
+FROM customers
+WHERE COUNT(orders.*) > 5         -- (-inf, NOW]  have they ever ordered 5+ times?
+```
 
 ## Time windows (the OVER frame)
 
@@ -66,7 +112,8 @@ end-inclusive**. Directions: `PRECEDING` (past) / `FOLLOWING` (future).
 Durations are always positive.
 
 ```
-window_spec := frame [HORIZONS <positive-int> [STEP <positive-duration>]]
+window_spec := [frame [HORIZONS <positive-int> [STEP <positive-duration>]]]
+               [RANK TOP <positive-int>]
 
 frame := RANGE BETWEEN <bound> AND <bound>
        | <duration> PRECEDING        -- (NOW - dur, NOW]
@@ -99,10 +146,22 @@ SUM(usage.count) OVER (1 DAY FOLLOWING HORIZONS 28)              -- 28 daily ste
 SUM(sales.qty)   OVER (30 DAYS FOLLOWING HORIZONS 6 STEP 7 DAYS) -- overlapping
 ```
 
+**Ranking** — `RANK TOP K` keeps the K most likely values from the frame. It
+lives *in the frame*, so *when* and *how many* stay independent; the frame may
+be dropped entirely to rank over the whole future:
+```sql
+PREDICT ARRAY_AGG(transactions.article_id) OVER (30 DAYS FOLLOWING RANK TOP 12)
+FROM customers
+
+-- frame dropped entirely: rank over the whole future
+PREDICT ARRAY_AGG(transactions.article_id) OVER (RANK TOP 12)
+FROM customers
+```
+
 **Named windows** — declare once, reference as `OVER <name>`:
 ```sql
 PREDICT SUM(orders.revenue) OVER w - SUM(orders.cost) OVER w
-FOR EACH customers.customer_id
+FROM customers
 WINDOW w AS (30 DAYS FOLLOWING)
 ```
 
@@ -124,14 +183,14 @@ WHERE customers.location IN ('NY', 'CA') AND EXISTS(orders.*) OVER (180 DAYS PRE
 
 ```
 EXPECTED VALUE | PROBABILITY | CLASS | DISTRIBUTION
-| QUANTILES (<num>, ...) | INTERVAL <int> [%] | MULTILABEL | MULTICLASS
+| MULTILABEL | MULTICLASS
 ```
 
 `RETURN PROBABILITY` gives a calibrated score for a classification target.
 `MULTICLASS` (predicted class + approximate probabilities) and `MULTILABEL`
-(top-k ranking) execute on the current RT-J checkpoint. `QUANTILES`/`INTERVAL`
-parse and validate but are **not executable** (no variance/quantile head in the
-checkpoint).
+(top-k ranking) execute on the current RT-J checkpoint. `QUANTILES` and
+`INTERVAL` are **not part of the language** — the model exposes a single point
+estimate, not a distribution — and are rejected at parse time.
 
 ## Task types (inferred from the target — never declared)
 
@@ -141,7 +200,7 @@ checkpoint).
 | aggregation vs literal — `COUNT(...) = 0`, `SUM(...) > 100` | binary classification | ✅ |
 | `EXISTS(...)` / `NOT EXISTS(...)` boolean target | binary classification | ✅ |
 | static categorical column, `FIRST`/`LAST` | multiclass | ✅ (class + approx. probs, via text head) |
-| `LIST_DISTINCT(...) RANK TOP K` | ranking | ✅ (top-k via per-candidate existence scoring) |
+| `LIST_DISTINCT(...)` / `ARRAY_AGG(...)` with `RANK TOP K` in the frame | ranking | ✅ (top-k via per-candidate existence scoring) |
 | any window with `HORIZONS > 1` | forecasting (value per horizon) | regression head |
 
 Model routing: classification → `hf://stanford-star/rt-j/classification`;
