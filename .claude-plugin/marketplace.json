@@ -1,0 +1,20 @@
+{
+  "name": "RelQL",
+  "description": "RelativeDB / RelQL — predictive queries over your relational data, inside Claude Code.",
+  "owner": {
+    "name": "RelativeDB",
+    "url": "https://github.com/RelativeDB"
+  },
+  "plugins": [
+    {
+      "name": "RelQL",
+      "displayName": "RelQL",
+      "source": "./",
+      "description": "Ask forward-looking questions about your data (churn, conversion, demand, risk). Connects to your warehouse, maps the schema, writes a RelQL query, and scores it with the RT-J relational model.",
+      "homepage": "https://relql.com",
+      "repository": "https://github.com/RelativeDB/RelQL-cc",
+      "license": "Apache-2.0",
+      "keywords": ["relql", "relativedb", "prediction", "churn", "forecast", "relational-transformer"]
+    }
+  ]
+}

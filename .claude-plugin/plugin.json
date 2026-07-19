@@ -1,0 +1,14 @@
+{
+  "name": "RelQL",
+  "displayName": "RelQL",
+  "version": "0.1.0",
+  "description": "Predictive queries over your relational data. Ask what is likely to happen — churn, conversion, demand, risk — and RelQL connects to your data, maps the schema, writes the query, and scores it with the RT-J relational foundation model.",
+  "author": {
+    "name": "RelativeDB",
+    "url": "https://github.com/RelativeDB"
+  },
+  "homepage": "https://relql.com",
+  "repository": "https://github.com/RelativeDB/RelQL-cc",
+  "license": "Apache-2.0",
+  "keywords": ["relql", "relativedb", "prediction", "churn", "forecast", "relational-transformer"]
+}
